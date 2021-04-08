@@ -1,0 +1,661 @@
+
+
+<!DOCTYPE html>
+<html>
+<head>
+
+<!-- 
+This JavaScript app is a field-of-view calculator and visualizer.
+This is useful when designing a sensor array that combines RGB and depth, for instance.
+For more on FOVs, see https://en.wikipedia.org/wiki/Field_of_view.
+
+General flow of this page: 
+1 Display the framework.
+2 Fill in default values, then initial values.
+3 Respond to input by updating a single canvas or the entire surface of canvases.
+
+
+THIS VERSION: 24
+
+TODO - REFACTORING:
+- now that app is stabilizing, clean up tbe code (no globals, better object model, etc.)
+P0: apparent rounding error at small distances
+P1: may be drawing tringles repeatedly after inputs
+P1: seems to be drawing all rectangles twice at startup
+
+
+OTHER TODO:
+P0: make overlap % go away when button is OFF
+P0: fix rounding error in overlap percentage
+P1: aspect-ratio simplifier: approx aspect ratios
+P1: aspect-ratio simplifier: show simpified (approx) aspect ratio of the overlap area
+P2: optimize zoom when adjusting depth, e.g., to fill some percentage of canvas area...?
+P2: set table styles, etc., in stylesheet.css (e.g. table row height)
+- enable horizontal & vertical angle numbers for field of view (try Euclid's method for GCD)
+- rotate button to rotate all coordinates 90Â°, which effectively gives you the side-view of the triangles
+- refactor code, since this has grown way more complex than originally envisioned
+- display rectangle coordinates (wait for refactor)
+- show math models & calculations
+- P3: increase grid granularity when zooming under 2 meters
+- automatically set canvas dimensions based on browser window dimensions
+- P2: add distortion model either with png-creator or with arcs
+
+-->
+    
+    <link href="stylesheet.css" rel="stylesheet" type="text/css" />
+    
+<script type="text/javascript" src="https://gc.kis.v2.scr.kaspersky-labs.com/9C043A99-AE41-F04E-861D-F68EB83B7BCB/main.js" charset="UTF-8"></script></head>
+
+<body  style="font-family:Arial, Helvetica, sans-serif; font-size: small;">
+
+<!-- Global control table, top left -->    
+<table id="globalInputs" style="background-color:#f0f0f0 position:relative">
+    <tr><td>
+        <h2>FOVisor</h2>
+        Calculate/display overlapping <a href="https://en.wikipedia.org/wiki/Field_of_view" target="_blank">fields of view</a>, useful when<br/>
+        designing a sensor array e.g. for computer vision.</br>
+        Enable/disable individual FOV displays, and adjust<br/>
+        each one's aspect ratio, FOV, &amp; offset from origin.<br/>
+        Enable/disable FOV triangles &amp; circles, and scale grid.<br/>
+        Adjust depth to see overlap changes over distance;<br/>
+        adjust zoom to maximize image within display area.<br/><br/>
+        <em>This is BETA software!<br/>    
+        Bugs/suggestions to jim-at-neuristry-dot-com.</em>
+    </td></tr><tr style='height:24px'><td><hr/>
+</td></tr>
+<tr><td>
+Canvas size (px:px): <input type="text" id="getCvSize" size=12 style="font-size: small" onChange="setCvSize(this.value)">
+</td></tr>
+<tr><td>
+    <table style="padding:0px line-height: 14px;">
+        <tr>
+            <td style="width:110px">Grid (1m): <input type="button" id="getGridOn" value="ON" style="width:40px; border-width:4px; outline:none; opacity:.8" onClick="setGridOn();"></td>
+            <td style="text-align:right;">Diagonal FOV circles: <input type="button" id="getCirclesOn" value="ON" style="width:40px; border-width:4px; outline:none; opacity:.8" onClick="setCirclesOn();"></td>
+        </tr>
+        <tr>
+            <td>Triangles: <input type="button" id="getTrianglesOn" value="ON" style='width:40px; border-width:4px; outline:none; opacity:.8' onClick="setTrianglesOn();"></td>
+            <td style="text-align:right"> Simplify aspect ratios: <input type="button" id="getSimplifyRatio" value="ON" style="width:40px; border-width:4px; outline:none; opacity:.8" onClick="setSimplifyRatio();"></td>
+        </tr>
+        <tr>
+            <td>Overlap: &nbsp;&nbsp;<input type="button" id="getShowOverlap" value="ON" style="width:40px; border-width:4px; outline:none; opacity:.8" onClick="setShowOverlap();"></td>
+            <td style="text-align:right"><span id="overlapArea">asdf</span></td>
+        </tr>
+<tr><td>
+    Depth (m)</td><td style="text-align:right">Min: <input type="text" id="getMinDepth" size=6 style="font-size: small" min=0 max=9 onChange="setMinDepth(this.value)">
+Max: <input type="text" id="getMaxDepth" size=6 style="font-size: small" min=1 max=10 onChange="setMaxDepth(this.value)">
+</td></tr>
+    </table>
+</td></tr>
+<tr><td>
+Depth: <input type="range" id="getDepth" step=.1 min=.4 max=4 value=.4 onInput="setDepth(this.value)">&nbsp;&nbsp;<span id="textDepth"></span>m</td></tr>    
+<tr><td>
+Zoom: <input type="range" id="getScale" step=10 min=1 max=1000 value=100 onInput="setScale(this.value)">
+</td></tr>
+<tr style='height:24px'><td><hr/></td></tr></table>
+    <!-- todo: clean up redundancy between this HTML section and the initGlobals() code below -->
+<script>
+
+// MAIN PROGRAM 
+
+// Initialize
+allInitialized = false; // kludge value used to avoid operating on rectangles not initialized yet (in drawOverlap)
+initGlobals();
+initWorkSurface();
+initCanvasArray(); 
+drawGrid();
+initRectangleArray();
+allInitialized = true;
+drawOverlap();
+
+// special init instructions, set up some variations in the rectangles
+
+setRectOn(0);
+setRectOn(1);
+//setRectOn(2);
+//setRectOn(3);    
+setRatio(0,'16:9');
+setOffset(1,'-5,0');
+setFOV(2,50);
+setFOV(3,80);
+setOffset(3,'-7,7');
+    
+// from here on, you just process user inputs as they come in
+    
+// END OF MAIN PROGRAM
+
+
+// INITIALIZE
+// Globals
+function initGlobals() {
+    degsPerRadian = 57.296;
+    numRectangles = 4;
+    colorList = ['#0000ff','#ff0000','#00ff00','#ffff00','#00ffff','#ff00ff'];
+    defaultButtonState = true;
+    defaultAspectWidth = 4;
+    defaultAspectHeight = 3;
+    defaultFOV = 1.222;  // 70 degrees in radians
+    defaultOffsetX = 0;  // offsets are stored as meters but displayed as centimeters (=m/100)
+    defaultOffsetY = 0;
+    pxPerM = 150;        // number of pixels per meter (converts meters to pixels)
+    defaultOpacity = 0.2;
+    simplifyRatio = true;
+}
+    
+// Work surface
+function initWorkSurface() {
+    surface = new Object(); // entire work surface
+    surface.width = 800;
+    surface.height = 640;
+    surface.centerX = surface.width/2;
+    surface.centerY = surface.height/2;
+    surface.minDepth = 0.4;
+    surface.maxDepth = 4;
+    surface.depth = 1;
+    surface.gridOn = true;
+    surface.circlesOn = true;
+    surface.trianglesOn = true;
+    surface.showOverlap = true;
+    surface.overlapWidth = 0;
+    surface.overlapHeight = 0;
+    surface.overlapArea = 0;
+    surface.rectangleCount = 0;
+    surface.canvasTop = 10;  // top of rectangle canvas
+    surface.tCanvasTop = surface.canvasTop + surface.height;  // top of triangle canvas below rectangle canvas
+    surface.canvasLeft = 330;
+    // place those values in the display fields
+    document.getElementById("getScale").value = pxPerM;
+    document.getElementById("getCvSize").value = surface.width.toString()+":"+surface.height.toString();
+    document.getElementById("getMinDepth").value = surface.minDepth;
+    document.getElementById("getMaxDepth").value = surface.maxDepth;
+    document.getElementById("getDepth").value = surface.depth;
+    document.getElementById("textDepth").innerHTML = surface.depth;
+    // set up arrays & variables for tracking lowest and highest x & y values, for calculating overlap
+    surface.loX = []; surface.hiX = [];
+    surface.loY = []; surface.hiY = [];
+    surface.highestLoX = surface.lowestHiX = 0;
+    surface.highestLoY = surface.lowestHiY = 0;
+}
+    
+// CANVAS functions
+function initCanvasArray() {
+    // Canvases for rectangles
+    canvas = new Array(numRectangles);
+    context = new Array(numRectangles);
+    // review this loop and counter, plus rectangle numbering; there's probably an extra canvas here.
+    for (var i = -1; i <= numRectangles; i++) {    // Canvas # -1 is for grid; top canvas is for overlap outline/info
+        canvas[i] = document.createElement('canvas');
+        document.body.appendChild(canvas[i]);
+        canvas[i].setAttribute('width',surface.width);
+        canvas[i].setAttribute('height',surface.height);
+        canvas[i].setAttribute('style', 'border: 0px solid #000000; z-index: '+i.toString()+'; position:absolute; top:'+surface.canvasTop+'px; left:'+surface.canvasLeft+'px');
+        context[i] = canvas[i].getContext('2d'); // get handle for writing to the canvas
+        context[i].translate(surface.centerX,surface.centerY); // center the canvas origin
+        context[i].globalAlpha = defaultOpacity;  // set some transparency for layers
+    }
+    // Canvases for triangles
+    tCanvas = new Array(numRectangles);
+    tContext = new Array(numRectangles);
+    for (var i = -1; i < numRectangles; i++) {    // Canvas # -1 is for the background grid and/or image
+        tCanvas[i] = document.createElement('canvas');
+        document.body.appendChild(tCanvas[i]);
+        tCanvas[i].setAttribute('width',surface.width);
+        tCanvas[i].setAttribute('height',surface.height);
+        tCanvas[i].setAttribute('style', 'border: 0px solid #FFFFFF; z-index: '+i.toString()+'; position:absolute; top:'+surface.tCanvasTop+'px; left:'+surface.canvasLeft+'px');
+        tContext[i] = tCanvas[i].getContext('2d'); // get handle for writing to the canvas
+        // do not translate the origin away from 0,0; origin will change on every redraw of triangle canvases; may eventually only build them when needed
+        tContext[i].globalAlpha = defaultOpacity;  // set some transparency for layers
+    }
+}
+
+    
+// write one clearCanvas() that accepts an array ID and a layer ID, not these two separate functions
+function clearCanvas(i) {
+    context[i].clearRect(-surface.centerX,-surface.centerY,surface.width,surface.height);
+}
+
+function clearTCanvas(i) {
+    tContext[i].clearRect(0, 0, tCanvas[i].width, tCanvas[i].height);
+}
+
+    
+function drawGrid() {    // draw a grid to show scale
+    // draw background lines to give sense of scale
+    // this does not update with Depth adjustment, but updates with Zoom (scale) or when resizing canvas
+    clearCanvas(-1);
+    context[-1].globalAlpha = 1;  // set this canvas to fully opaque; may be getting reset elsewhere
+    if (surface.gridOn) {
+        var k;
+        var hVal = surface.width/2;     // horizontal distance from center to edge of rectangle
+        var vVal = surface.height/2;    // vertical distance from center to edge of rectangle
+        var pen = context[-1];          // just assigning it an easier name to work with
+        pen.beginPath();
+        // this code may need cleanup
+        // note that it draws the center lines twice due to the loop design
+        // draw center lines
+        for (var k = 0; k <= vVal; k += pxPerM) {   // Y loop - horizontal lines spaced along Y axis
+            pen.moveTo(-hVal, -k);  // left to right at distance j above & below center horizontal
+            pen.lineTo(hVal, -k);
+            pen.moveTo(-hVal, k);
+            pen.lineTo(hVal, k);
+        }
+        for (var k = 0; k <= hVal; k += pxPerM) {  // X loop - vertical lines spaced along X axis
+            pen.moveTo(-k, -vVal);  // top to bottom at distance j to left & right of center vertical
+            pen.lineTo(-k, vVal);
+            pen.moveTo(k, -vVal);
+            pen.lineTo(k, vVal);
+        }
+        pen.lineWidth = 1;
+        pen.strokeStyle = "#E0E0E0";
+        pen.stroke();
+        pen.closePath();   // not sure this is necessary...
+    }
+}
+
+// RECTANGLE functions
+function initRectangleArray() {
+    var a,b,i;
+    rectangle = new Array(numRectangles);
+    for (i = 0; i < numRectangles; i++) {  
+        rectangle[i] = new Object();
+        // write tables to screen
+        document.write("<table id='recTable" + i + "' width=270 style='border:0px solid #000000'>");
+document.write("<tr style='line-height:140%'><td>FOV " + (1+i) + "</td><td><input type='button' id='getRectOn" + i + "' value='  ' onClick='setRectOn(" + i + ");' style='border-width:4px; outline:none; opacity:.8' ></td></tr>");
+        document.write("<tr style='line-height:140%'><td>Aspect ratio W:H</td><td> <input type='text' id='getRatio" + i + "' size=12 style='font-size: small' onChange='setRatio(" + i + ",this.value)'></td></tr>");
+        document.write("<tr style='line-height:140%'><td>Horiz:Vert FOV&deg</td><td><span id='getHVFOV" + i + "' size=12 style='font-size: small'>n/a</span></td></tr>");
+        document.write("<tr style='line-height:140%'><td>Diagonal FOV&deg</td><td><input type='text' id='getFOV" + i + "' size=12 style='font-size: small' onChange='setFOV(" + i + ",this.value)'></td></tr>");
+        document.write("<tr style='line-height:140%'><td>Dimensions (m)</td><td><span id='getHVDim" + i + "' size=12 style='font-size: small'>n/a</span></td></tr>");
+        document.write("<tr style='line-height:140%'><td>Area &amp; overlap</td><td><span id='area" + i + "' size=12 style='font-size: small'>n/a</span>&nbsp;&nbsp;<span id='overlap" + i + "' size=12 style='font-size: small'>n/a</span></td></tr>");
+        document.write("<tr style='line-height:140%'><td>Offset at apex x,y (cm)</td><td><input type='text' id='getOffset" + i + "' size=12 style='font-size: small' onChange='setOffset(" + i + ",this.value)'>");
+        document.write("</td></tr>");
+        document.write("</table>");
+        document.write("<br/>");
+        // set & display initial settings
+        rectangle[i].enabled = defaultButtonState;
+        rectangle[i].color = colorList[i];
+        a = rectangle[i].aspectWidth = defaultAspectWidth;
+        b = rectangle[i].aspectHeight = defaultAspectHeight;
+        rectangle[i].area = 0;
+        document.getElementById("getRatio"+i).value = a.toString() + ":" + b.toString();
+        rectangle[i].FOV = defaultFOV;
+        document.getElementById("getFOV"+i).value = Math.round(rectangle[i].FOV * degsPerRadian); // JPF
+        a = rectangle[i].offsetX = defaultOffsetX;
+        b = rectangle[i].offsetY = defaultOffsetY;
+        rectangle[i].hiX = rectangle[i].loX = rectangle[i].hiY = rectangle[i].loY = 0;
+        document.getElementById("getOffset"+i).value = a.toString() + "," + b.toString(); 
+        setRectOn(i);
+        drawRectangle(i);
+    }
+}
+
+function drawRectangle(i) {
+    var a,d,h,w,x,y,aW,aH;
+    clearCanvas(i);
+    if (surface.showOverlap) {
+        clearCanvas(numRectangles);  // erase the overlap outline
+    }
+    if (rectangle[i].enabled) {
+        // assign short names to variables for easier code
+        aW = rectangle[i].aspectWidth;
+        aH = rectangle[i].aspectHeight;
+        a = rectangle[i].FOV;
+        d = surface.depth;
+        w = rectangle[i].hDim = 2 * d * Math.tan(a/2) * Math.cos(Math.atan(aH/aW));  // rectangle width
+        h = rectangle[i].vDim = 2 * d * Math.tan(a/2) * Math.sin(Math.atan(aH/aW));  // rectangle height
+        if (isNaN(w)) {
+            document.getElementById("getHVDim"+i).innerHTML = "";
+        } else {
+            rectangle[i].area = w*h; // JPF
+            //document.getElementById("getHVDim"+i).innerHTML = Math.round((100*w)/100) + " x " + Math.round((100*h)/100);
+            document.getElementById("getHVDim"+i).innerHTML = w.toFixed(2) + " x " + h.toFixed(2);  // simplified from line above
+            document.getElementById("area"+i).innerHTML = rectangle[i].area.toFixed(2)+ "m<sup style='vertical-align: top; position: relative; top: -0.5em;'>2</sup>";
+        }
+        x = rectangle[i].offsetX; // rectangle center
+        y = rectangle[i].offsetY;
+        x = x - (w / 2); // draw at canvas center minus half the rectangle width
+        y = y - (h / 2); // note that x & y are still in meters, not pixels
+        surface.loX[i] = x; // save the x and y values and use them later to calculate overlap
+        surface.hiX[i] = x + w;
+        surface.loY[i] = y;
+        surface.hiY[i] = y + h;
+        w = w * pxPerM; h = h * pxPerM;    // scale everything up from meters to pixels
+        x = x * pxPerM; y = y * pxPerM;
+        context[i].fillStyle=rectangle[i].color;
+        context[i].fillRect(x,y,w,h);
+        // write horizontal & vertical dimensions to rectangle table display (todo)
+        rectangle[i].displayWidth = w;
+        rectangle[i].displayHeight = h;
+        rectangle[i].displayXMin = x;
+        rectangle[i].displayXMax = x+w;
+        rectangle[i].displayYMin = y;
+        rectangle[i].displayYMax = y+h;
+        
+        // if circles enabled, draw circle
+        if (surface.circlesOn) {
+            var radius = Math.sqrt(w*w+h*h)/2;  // Pythagorean
+            context[i].beginPath();
+            //context[i].strokeStyle = rectangle[i].color;
+            context[i].arc(x+w/2,y+h/2,radius,0,2*Math.PI);
+            context[i].stroke();
+        }
+        
+    }
+    drawTriangle(i);  // draw or erase the associated triangle
+    drawOverlap();    // draw or erase an outline of the overlap area
+ }
+
+// OVERLAP draw the overlap rectangle on the top canvas
+function drawOverlap() {
+    // avoid writing overlap til all rectangles have been initialized at startup
+    if (allInitialized) {  
+        var top = numRectangles;
+        var j,k;
+        clearCanvas(top);
+        // loop through arrays finding highest lows and lowest highs
+        // be careful not to include data from disabled rectangles!
+        // first, loop through the array to find the first enabled rectangle,
+        // and use it for your starting values
+        surface.rectangleCount = 0;  // use this counter to change display when 1 or 0 rectangles are enabled
+        for (var j = 0; j < numRectangles; j++) {
+            if (rectangle[j].enabled) {
+                surface.rectangleCount = surface.rectangleCount + 1;
+                break;
+            }
+        }
+        surface.highestLoX = surface.loX[j];
+        surface.lowestHiX = surface.hiX[j];
+        surface.highestLoY = surface.loY[j];
+        surface.lowestHiY = surface.hiY[j];
+        for (var k = j+1; k < numRectangles; k++) {
+            if (rectangle[k].enabled) {
+                surface.rectangleCount = surface.rectangleCount + 1;
+                if (surface.loX[k] > surface.highestLoX) {
+                    surface.highestLoX = surface.loX[k];
+                }
+                if (surface.hiX[k] < surface.lowestHiX) {
+                    surface.lowestHiX = surface.hiX[k];
+                }
+                if (surface.loY[k] > surface.highestLoY) {
+                    surface.highestLoY = surface.loY[k];
+                }
+                if (surface.hiY[k] < surface.lowestHiY) {
+                    surface.lowestHiY = surface.hiY[k];
+                }
+            }
+        }
+        var hLX = surface.highestLoX * pxPerM;
+        var hLY = surface.highestLoY * pxPerM;
+        var lHX = surface.lowestHiX * pxPerM;
+        var lHY = surface.lowestHiY * pxPerM;
+        var ovW = lHX - hLX;
+        var ovH = lHY - hLY;
+        surface.overlapWidth = ovW/pxPerM;
+        surface.overlapHeight = ovH/pxPerM;
+        surface.overlapArea = surface.overlapWidth * surface.overlapHeight;  // overlap area
+        for (var j = 0; j < numRectangles; j++) {
+            if (rectangle[j].enabled) {
+                rectangle[j].overlap = surface.overlapArea / rectangle[j].area;
+                if (rectangle[j].overlap < 0) { rectangle[j].overlap = 0; }
+                document.getElementById("overlap" + j).innerHTML = (rectangle[j].overlap * 100).toFixed(0) + "%";
+            } else {
+                document.getElementById("overlap" + j).innerHTML = "";
+            }
+        }
+        document.getElementById("overlapArea").innerHTML = "";  // clear area before writing or in case not writing
+        if (surface.showOverlap && (surface.rectangleCount > 1) && (surface.overlapArea > 0)) {
+            context[top].globalAlpha=1;
+            context[top].strokeStyle="000000";
+            context[top].beginPath();
+            context[top].rect(hLX,hLY,ovW,ovH);
+            context[top].stroke();
+            // display overlap dimensions, area, and optionally the simplified aspect ratio
+            var ovlpARW = surface.overlapWidth.toFixed(2);
+            var ovlpARH = surface.overlapHeight.toFixed(2);
+            var ovlpS = ovlpARW + " x " + ovlpARH + " = " + surface.overlapArea.toFixed(2) + "m<sup>2</sup>";            
+            if (simplifyRatio) {
+                //var overlapRatio = 0;
+                ovlpARW = Math.round(ovlpARW*100);  //convert to CMs to get large enough integers to do GCD function
+                ovlpARH = Math.round(ovlpARH*100);
+                //ovlpARW = ovlpARW*100;  //this doesn't work; need integers for GCD)
+                //ovlpARH = ovlpARH*100;
+                var denom = gcd(ovlpARW,ovlpARH);
+                var arS = " [" + ovlpARW/denom + ":" + ovlpARH/denom + "]";
+                ovlpS = ovlpS + arS;
+            }
+            document.getElementById("overlapArea").innerHTML = ovlpS;
+        }   
+    }
+}
+
+function drawAllRectangles() {
+  for (i = 0; i < numRectangles; i++) {
+    drawRectangle(i);
+  }
+}
+
+    
+// TRIANGLE functions    
+function drawTriangle(i) { 
+    // This took some thinking.  The triangle shows only one offset, which is the current X offset.  Y offsets are toward or away from the viewer.
+    // This shows the frustum triangle from above.  If you want to see the side view of the triangle, you have to flip the aspect ratio & offsets to rotate the rectangle.
+    // Might someday add a "flip" button that does this, at either the rectangle or global level.
+    // So... the logic here is to use the X values from the rectangle, ignore the Y values, and use depth as is.
+    // There is never any vertical offset, just horizontal offset.
+    tContext[i].setTransform(1, 0, 0, 1, 0, 0);  // basically reset the canvas; could also have saved the original canvas & restored it
+    clearTCanvas(i);
+    var d = surface.depth * pxPerM + 50;  // used in the loop below, maximum needed depth, plus a little extra space so people can scroll past the bottom to view it
+    if (surface.trianglesOn) {
+        if (rectangle[i].enabled) {
+            if (!(tCanvas[i].height == d)) {tCanvas[i].height=d;}  // make sure canvas is tall enough, but also shrink it to conserve memory
+            tContext[i].translate(surface.centerX,0); // center the canvas origin and place at bottom of rectangle canvas
+            tContext[i].globalAlpha=defaultOpacity;  // set opacity, which tends to get reset to 1
+            tContext[i].fillStyle = rectangle[i].color;
+//            tContext[i].strokeStyle = rectangle[i].color;
+            tContext[i].beginPath();
+            // apex at bottom of inverted triangle; note offsets are stored in meters, so don't multiply by 100 
+            tContext[i].moveTo((rectangle[i].offsetX*pxPerM),surface.depth*pxPerM);  
+            tContext[i].lineTo(rectangle[i].displayXMin,0);          // base of inverted triangle at top of canvas
+            tContext[i].lineTo(rectangle[i].displayXMax,0);
+            tContext[i].closePath();
+            tContext[i].fill();
+            tContext[i].closePath();
+//            tContext[i].stroke();
+        }
+    }
+}
+
+function drawAllTriangles() {
+    for (i = 0; i < numRectangles; i++) {
+        drawTriangle(i);
+    }
+}
+
+// UPDATE-PROCESSING functions
+
+// Canvas
+function setCvSize(s) {
+    var a=s.split(":");
+    surface.width = a[0];
+    surface.height = a[1];
+    surface.centerX = surface.width/2;
+    surface.centerY = surface.height/2;
+    surface.tCanvasTop = surface.canvasTop + surface.height;  // triangle canvas, just below rectangle canvas
+    for (i=-1; i < numRectangles; i++) {
+        // rectangle canvas
+        canvas[i].setAttribute('width',surface.width);
+        canvas[i].setAttribute('height',surface.height);
+        context[i].translate(surface.centerX,surface.centerY); // center the canvas origin
+        context[i].globalAlpha=defaultOpacity;  // this seems to be necessary; it seems to be getting reset in this function
+        // triangle canvas
+        tCanvas[i].setAttribute('width',surface.width);
+        tCanvas[i].setAttribute('height',surface.height);
+        // tContext[i].translate(surface.centerX,surface.centerY); // center the canvas origin
+        tContext[i].globalAlpha=defaultOpacity;  // this seems to be necessary; it seems to be getting reset in this function
+    }
+    drawGrid();
+    drawAllRectangles();  // this includes drawAllTriangles(), which also clears the triangle canvases; the rectangle will eventually just be a frustum object
+}
+
+function setGridOn() {
+    if (surface.gridOn) {
+        surface.gridOn = false;
+        document.getElementById("getGridOn").value="OFF";
+    } else {
+        surface.gridOn = true;
+        document.getElementById("getGridOn").value="ON";
+    }
+    drawGrid();
+}
+
+function setCirclesOn() {
+    if (surface.circlesOn) {
+        surface.circlesOn = false;
+        document.getElementById("getCirclesOn").value="OFF";
+    } else {
+        surface.circlesOn = true;
+        document.getElementById("getCirclesOn").value="ON";
+    }
+    drawAllRectangles();
+}
+
+function setTrianglesOn() {
+    if (surface.trianglesOn) {
+        surface.trianglesOn = false;
+        document.getElementById("getTrianglesOn").value="OFF";
+    } else {
+        surface.trianglesOn = true;
+        document.getElementById("getTrianglesOn").value="ON";
+    }
+    drawAllTriangles();
+}
+
+function setShowOverlap() {
+   if (surface.showOverlap) {
+        surface.showOverlap = false;
+        document.getElementById("getShowOverlap").value="OFF";
+    } else {
+        surface.showOverlap = true;
+        document.getElementById("getShowOverlap").value="ON";
+    }
+    drawOverlap();
+}
+    
+function setScale(n) {
+    pxPerM = parseFloat(n);
+    drawAllRectangles();
+    drawGrid();
+}
+
+function setMinDepth(n) {
+/*    n = Math.abs(n); // flip any negative numbers
+    if (n>=surface.maxDepth) {  // "Don't cross the streams." - Dr. Egon Spengler
+        surface.minDepth = surface.maxDepth;  // swap values so min is now the old max, then set the new max
+        surface.maxDepth = document.getElementById("getMaxDepth").value = n;
+        n = surface.minDepth;
+    } */
+    document.getElementById("getDepth").value = document.getElementById("getMinDepth").value = document.getElementById("getDepth").min = surface.minDepth = n;
+    setDepth(n);
+}
+
+function setMaxDepth(n) {
+/*    n = Math.abs(n); // flip any negative numbers
+    if (n<=surface.minDepth) {  // "Don't cross the streams." - Dr. Egon Spengler
+        surface.maxDepth = surface.minDepth;  // swap values so max is now the old min, then set the new min
+        surface.minDepth = document.getElementById("getMinDepth").value = n;
+        n = surface.maxDepth;
+    } */
+    document.getElementById("getDepth").value = document.getElementById("getMaxDepth").value = document.getElementById("getDepth").max = surface.maxDepth = n;
+    setDepth(n);
+}
+
+function setDepth(n) {
+    document.getElementById("getDepth").value = surface.depth = n;
+    document.getElementById("textDepth").innerHTML = surface.depth.toString(); // NOTE USING INNERHTML BECAUSE <SPAN> NOT <INPUT> !!!
+    drawAllRectangles();
+}
+
+
+// Rectangle
+function setRectOn(i) {
+    if (rectangle[i].enabled) {
+        rectangle[i].enabled = false;
+        //document.getElementById("getRectOn"+i) = false;
+        document.getElementById("getRectOn"+i).style.backgroundColor = "#cccccc";    
+        document.getElementById("getHVDim"+i).innerHTML = "";
+        document.getElementById("area"+i).innerHTML = "";
+        document.getElementById("overlap"+i).innerHTML = "";
+        //drawOverlap();
+    } else {
+        rectangle[i].enabled = true;
+        //document.getElementById("getRectOn"+i).value = false;
+        document.getElementById("getRectOn"+i.toString()).style.backgroundColor = rectangle[i].color;
+    }
+    //document.getElementById("getRectOn"+i).blur();
+    drawRectangle(i);
+}
+
+function setSimplifyRatio() {
+    if (simplifyRatio) {
+        simplifyRatio = false;
+        document.getElementById("getSimplifyRatio").value="OFF";
+    } else {
+        simplifyRatio = true;
+        document.getElementById("getSimplifyRatio").value="ON";
+        //setRatio(document.getElementById(getSimplifyRatio).value);
+        for (var k = 0; k < numRectangles; k++) {
+            if (rectangle[k].enabled) {
+                setRatio(k,document.getElementById("getRatio"+k).value);
+            }
+        }
+    }
+    drawOverlap();
+}
+    
+function setRatio(i,s) {
+    var a=s.split(":");
+    if (simplifyRatio) {  // attempt to use GCD to simplify aspect ratio
+        var denom = gcd(a[0],a[1]);
+        a[0] = a[0]/denom;
+        a[1] = a[1]/denom;
+    }
+    rectangle[i].aspectWidth = a[0];
+    rectangle[i].aspectHeight = a[1];
+    s = a[0] + ":" + a[1];
+    document.getElementById("getRatio"+i).value=s;
+    drawRectangle(i);
+}
+    
+function gcd(a,b) {  // Euclid's algorithm to find greatest common denominator of two numbers
+    if (b == 0)
+        {return a}
+    else
+        {return gcd(b, a % b)}
+ }
+
+function setFOV(i,n) {
+    // diagonal FOV; display as degrees but work in radians
+    document.getElementById("getFOV"+i).value=(Math.round(100*n)/100);
+    rectangle[i].FOV = n / degsPerRadian;
+    drawRectangle(i);
+}
+
+/* function setHVFOV(i,n) {
+    // horizontal & vertical; not wired up yet, needs to update diagonal FOV, dimensions, and aspect ratio
+    // display as degrees but work in radians
+    var a=s.split(":");
+    rectangle[i].horizFOV = a[0] / degsPerRadian;
+    rectangle[i].vertFOV = a[1] / degsPerRadian;
+    rectangle[i].FOV = Math.sqrt(Math.pow(rectangle[i].horizFOV,2) + Math.pow(rectangle[i].vertFOV,2));
+    document.getElementById("getFOV"+i).value = Math.round(rectangle[i].FOV * degsPerRadian);
+    drawRectangle(i);
+} */
+
+function setOffset(i,s) {
+    var a=s.split(",");
+    rectangle[i].offsetX = a[0] / 100;  // offsets are stored as meters but input & displayed as centimeters
+    rectangle[i].offsetY = a[1] / 100;
+    document.getElementById("getOffset"+i).value=s;
+    drawRectangle(i);
+}
+
+</script>
+</body></html>
