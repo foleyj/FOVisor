@@ -12,7 +12,7 @@ This JavaScript app allows engineers and hobbyists to visualize overlapping fiel
 * **Real-time Visualization:** Visualizes sensor frustums and 2D coverage areas on an HTML5 Canvas.
 * **Overlap Calculation:** Automatically calculates the percentage of overlap between multiple sensors.
 * **Dynamic Adjustments:**
-    * **Depth:** Adjust target distance to see how overlap changes (e.g., from 0.4m to 4m).
+    * **Depth:** Adjust the target distances and zoom to see how the overlap changes (e.g., from 0.4m to 4m).
     * **FOV & Aspect Ratio:** Configure individual sensor parameters (horizontal/vertical FOV, aspect ratio).
     * **Offsets:** Move sensors horizontally or vertically relative to the origin.
 * **Visual Aids:** Toggle grids, diagonal FOV circles, and frustum triangles to assist with layout planning.
