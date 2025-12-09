@@ -8,19 +8,17 @@ This is useful when designing a sensor array that combines RGB and depth, for in
 For more on FOVs, see https://en.wikipedia.org/wiki/Field_of_view.
 
 General flow of this page: 
-1 Display the framework.
+1 Display the visual framework.
 2 Fill in default values, then initial values.
-3 Respond to input by updating a single canvas or the entire surface of canvases.
+3 Respond to user input by updating a single canvas or the entire surface of canvases.
 
+UPDATE VERSION IN DISPLAY CODE below
 
-THIS VERSION: 24
-
-TODO - REFACTORING:
+TODO:
 - now that app is stabilizing, clean up tbe code (no globals, better object model, etc.)
 P0: apparent rounding error at small distances
 P1: may be drawing tringles repeatedly after inputs
 P1: seems to be drawing all rectangles twice at startup
-
 
 OTHER TODO:
 P0: make overlap % go away when button is OFF
@@ -40,8 +38,6 @@ P2: set table styles, etc., in stylesheet.css (e.g. table row height)
 
 -->
     
-// <link href="stylesheet.css" rel="stylesheet" type="text/css" />
-    
 </head>
 
 <body  style="font-family:Arial, Helvetica, sans-serif; font-size: small;">
@@ -51,14 +47,15 @@ P2: set table styles, etc., in stylesheet.css (e.g. table row height)
     <tr><td>
         <h2>FOVisor</h2>
         Calculate/display overlapping <a href="https://en.wikipedia.org/wiki/Field_of_view" target="_blank">fields of view</a>, useful when<br/>
-        designing a sensor array e.g. for computer vision.</br>
+        designing a sensor array, e.g. for computer vision.</br>
         Enable/disable individual FOV displays, and adjust<br/>
         each one's aspect ratio, FOV, &amp; offset from origin.<br/>
         Enable/disable FOV triangles &amp; circles, and scale grid.<br/>
         Adjust depth to see overlap changes over distance;<br/>
         adjust zoom to maximize image within display area.<br/><br/>
-        <em>This is BETA software!<br/>    
-        Bugs/suggestions to jim-at-neuristry-dot-com.</em>
+	    <em>This is version 1.01. Feedback to jim-at-tinriver-dot-com.<br/>
+		<a href="https://github.com/foleyj/FOVisor" target="_blank">View Source Code on GitHub</a></em>
+		
     </td></tr><tr style='height:24px'><td><hr/>
 </td></tr>
 <tr><td>
