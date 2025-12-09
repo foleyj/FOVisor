@@ -2,7 +2,7 @@
 
 **A visualization tool for designing multi-sensor arrays.**
 
-This JavaScript app allows engineers and hobbyists to visualize overlapping fields of view (FOV) for cameras and sensors. It's useful when designing arrays of multiple overlapping sensors, such as fisheye, RGB, and depth sensors, where determining the precise overlap area at varying depths is critical.
+This JavaScript app allows engineers and hobbyists to visualize overlapping fields of view (FOV) for cameras and sensors. It's useful when designing arrays of multiple overlapping sensors, such as RGB and depth sensors, where determining the precise overlap area at varying depths is critical.
 
 #### 🚀 [Run the App Live](https://foleyj.github.io/FOVisor/)
 
