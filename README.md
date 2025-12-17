@@ -30,5 +30,5 @@ This JavaScript app allows engineers and hobbyists to visualize overlapping fiel
 
 ## Author
 **Jim Foley**
-* [Portfolio](https://jimfoley.net) (Coming Soon)
+* [Portfolio](https://jimfoley.net) 
 * [LinkedIn Profile](https://www.linkedin.com/in/jimfoley3/)
