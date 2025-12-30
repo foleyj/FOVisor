@@ -2,9 +2,16 @@
 <html>
 <head>
 
+
 <!-- 
-This JavaScript app is a field-of-view calculator and visualizer.
-This is useful when designing a sensor array that combines RGB and depth, for instance.
+This JavaScript app is a field-of-view (FOV) calculator and visualizer.
+It shows both the visual FOV (a rectangle) and the view from above of the FOV as a
+triangle that expands outward from the device to the target distance.
+Since two sensors generally cannot occupy the same exact location on the device, there
+is always a small offset between them at the starting point, which becomes less 
+significant at a distance. Also the various sensors may have different aspect ratios.
+So the app calculates the overlap (or intersection) of the multiple FOVs.
+All this is useful when designing a sensor array (of both RGB and depth, for instance).
 For more on FOVs, see https://en.wikipedia.org/wiki/Field_of_view.
 
 General flow of this page: 
@@ -15,7 +22,7 @@ General flow of this page:
 UPDATE VERSION IN DISPLAY CODE below
 
 TODO:
-- now that app is stabilizing, clean up tbe code (no globals, better object model, etc.)
+- now that app is stabilizing, clean up tbe code (better object model, etc.)
 P0: apparent rounding error at small distances
 P1: may be drawing tringles repeatedly after inputs
 P1: seems to be drawing all rectangles twice at startup
@@ -23,6 +30,7 @@ P1: seems to be drawing all rectangles twice at startup
 OTHER TODO:
 P0: make overlap % go away when button is OFF
 P0: fix rounding error in overlap percentage
+P1: clean up globals
 P1: aspect-ratio simplifier: approx aspect ratios
 P1: aspect-ratio simplifier: show simpified (approx) aspect ratio of the overlap area
 P2: optimize zoom when adjusting depth, e.g., to fill some percentage of canvas area...?
@@ -87,12 +95,36 @@ Depth: <input type="range" id="getDepth" step=.1 min=.4 max=4 value=.4 onInput="
 Zoom: <input type="range" id="getScale" step=10 min=1 max=1000 value=100 onInput="setScale(this.value)">
 </td></tr>
 <tr style='height:24px'><td><hr/></td></tr></table>
-    <!-- todo: clean up redundancy between this HTML section and the initGlobals() code below -->
+
 <script>
 
 // MAIN PROGRAM 
 
-// Initialize
+// CONFIGURATION
+
+// Constants
+
+const CONFIG = {
+    DEGS_PER_RADIAN: 57.296,
+    NUM_RECTANGLES: 4,
+    COLORS: ['#0000ff', '#ff0000', '#00ff00', '#ffff00', '#00ffff', '#ff00ff'],
+    // Default settings for new rectangles
+    DEFAULT: {
+        ASPECT_WIDTH: 4,
+        ASPECT_HEIGHT: 3,
+        FOV: 1.222, // 70 degrees in radians
+        OFFSET_X: 0,
+        OFFSET_Y: 0,
+        PX_PER_METER: 150, // number of pixels per meter (converts meters to pixels)
+        OPACITY: 0.2,
+        SIMPLIFY_RATIO: true,
+        BUTTON_STATE: true
+    }
+};
+
+
+
+// Initialize global variables
 allInitialized = false; // kludge value used to avoid operating on rectangles not initialized yet (in drawOverlap)
 initGlobals();
 initWorkSurface();
@@ -102,10 +134,9 @@ initRectangleArray();
 allInitialized = true;
 drawOverlap();
 
-// special init instructions, set up some variations in the rectangles
-
+// special init instructions, set up some arbitrary variations in the rectangles
 setRectOn(0);
-setRectOn(1);
+setRectOn(1); // turn on the first two rectangle displays
 //setRectOn(2);
 //setRectOn(3);    
 setRatio(0,'16:9');
@@ -122,18 +153,10 @@ setOffset(3,'-7,7');
 // INITIALIZE
 // Globals
 function initGlobals() {
-    degsPerRadian = 57.296;
-    numRectangles = 4;
-    colorList = ['#0000ff','#ff0000','#00ff00','#ffff00','#00ffff','#ff00ff'];
-    defaultButtonState = true;
-    defaultAspectWidth = 4;
-    defaultAspectHeight = 3;
-    defaultFOV = 1.222;  // 70 degrees in radians
-    defaultOffsetX = 0;  // offsets are stored as meters but displayed as centimeters (=m/100)
-    defaultOffsetY = 0;
-    pxPerM = 150;        // number of pixels per meter (converts meters to pixels)
-    defaultOpacity = 0.2;
-    simplifyRatio = true;
+    pxPerMeter = CONFIG.DEFAULT.PX_PER_METER;        // number of pixels per meter (converts meters to pixels)
+    opacity = CONFIG.DEFAULT.OPACITY;
+    simplifyRatio = CONFIG.DEFAULT.SIMPLIFY_RATIO;
+    buttonState = CONFIG.DEFAULT.BUTTON_STATE;
 }
     
 // Work surface
@@ -158,7 +181,7 @@ function initWorkSurface() {
     surface.tCanvasTop = surface.canvasTop + surface.height;  // top of triangle canvas below rectangle canvas
     surface.canvasLeft = 330;
     // place those values in the display fields
-    document.getElementById("getScale").value = pxPerM;
+    document.getElementById("getScale").value = CONFIG.DEFAULT.PX_PER_METER;
     document.getElementById("getCvSize").value = surface.width.toString()+":"+surface.height.toString();
     document.getElementById("getMinDepth").value = surface.minDepth;
     document.getElementById("getMaxDepth").value = surface.maxDepth;
@@ -174,66 +197,64 @@ function initWorkSurface() {
 // CANVAS functions
 function initCanvasArray() {
     // Canvases for rectangles
-    canvas = new Array(numRectangles);
-    context = new Array(numRectangles);
+    canvas = new Array(CONFIG.NUM_RECTANGLES);
+    rectcontext = new Array(CONFIG.NUM_RECTANGLES);
     // review this loop and counter, plus rectangle numbering; there's probably an extra canvas here.
-    for (var i = -1; i <= numRectangles; i++) {    // Canvas # -1 is for grid; top canvas is for overlap outline/info
+    for (var i = -1; i <= CONFIG.NUM_RECTANGLES; i++) {    // Canvas # -1 is for grid; top canvas is for overlap outline/info
         canvas[i] = document.createElement('canvas');
         document.body.appendChild(canvas[i]);
         canvas[i].setAttribute('width',surface.width);
         canvas[i].setAttribute('height',surface.height);
         canvas[i].setAttribute('style', 'border: 0px solid #000000; z-index: '+i.toString()+'; position:absolute; top:'+surface.canvasTop+'px; left:'+surface.canvasLeft+'px');
-        context[i] = canvas[i].getContext('2d'); // get handle for writing to the canvas
-        context[i].translate(surface.centerX,surface.centerY); // center the canvas origin
-        context[i].globalAlpha = defaultOpacity;  // set some transparency for layers
+        rectcontext[i] = canvas[i].getContext('2d'); // get handle for writing to the canvas
+        rectcontext[i].translate(surface.centerX,surface.centerY); // center the canvas origin
+        rectcontext[i].globalAlpha = opacity;  // set some transparency for layers
     }
     // Canvases for triangles
-    tCanvas = new Array(numRectangles);
-    tContext = new Array(numRectangles);
-    for (var i = -1; i < numRectangles; i++) {    // Canvas # -1 is for the background grid and/or image
-        tCanvas[i] = document.createElement('canvas');
-        document.body.appendChild(tCanvas[i]);
-        tCanvas[i].setAttribute('width',surface.width);
-        tCanvas[i].setAttribute('height',surface.height);
-        tCanvas[i].setAttribute('style', 'border: 0px solid #FFFFFF; z-index: '+i.toString()+'; position:absolute; top:'+surface.tCanvasTop+'px; left:'+surface.canvasLeft+'px');
-        tContext[i] = tCanvas[i].getContext('2d'); // get handle for writing to the canvas
+    triangleCanvas = new Array(CONFIG.NUM_RECTANGLES);
+    triangleContext = new Array(CONFIG.NUM_RECTANGLES);
+    for (var i = -1; i < CONFIG.NUM_RECTANGLES; i++) {    // Canvas # -1 is for the background grid and/or image
+        triangleCanvas[i] = document.createElement('canvas');
+        document.body.appendChild(triangleCanvas[i]);
+        triangleCanvas[i].setAttribute('width',surface.width);
+        triangleCanvas[i].setAttribute('height',surface.height);
+        triangleCanvas[i].setAttribute('style', 'border: 0px solid #FFFFFF; z-index: '+i.toString()+'; position:absolute; top:'+surface.tCanvasTop+'px; left:'+surface.canvasLeft+'px');
+        triangleContext[i] = triangleCanvas[i].getContext('2d'); // get handle for writing to the canvas
         // do not translate the origin away from 0,0; origin will change on every redraw of triangle canvases; may eventually only build them when needed
-        tContext[i].globalAlpha = defaultOpacity;  // set some transparency for layers
+        triangleContext[i].globalAlpha = opacity;  // set some transparency for layers
     }
 }
-
     
 // write one clearCanvas() that accepts an array ID and a layer ID, not these two separate functions
 function clearCanvas(i) {
-    context[i].clearRect(-surface.centerX,-surface.centerY,surface.width,surface.height);
+    rectcontext[i].clearRect(-surface.centerX,-surface.centerY,surface.width,surface.height);
 }
 
 function clearTCanvas(i) {
-    tContext[i].clearRect(0, 0, tCanvas[i].width, tCanvas[i].height);
+    triangleContext[i].clearRect(0, 0, triangleCanvas[i].width, triangleCanvas[i].height);
 }
 
-    
 function drawGrid() {    // draw a grid to show scale
     // draw background lines to give sense of scale
     // this does not update with Depth adjustment, but updates with Zoom (scale) or when resizing canvas
     clearCanvas(-1);
-    context[-1].globalAlpha = 1;  // set this canvas to fully opaque; may be getting reset elsewhere
+    rectcontext[-1].globalAlpha = 1;  // set this canvas to fully opaque; may be getting reset elsewhere
     if (surface.gridOn) {
         var k;
         var hVal = surface.width/2;     // horizontal distance from center to edge of rectangle
         var vVal = surface.height/2;    // vertical distance from center to edge of rectangle
-        var pen = context[-1];          // just assigning it an easier name to work with
+        var pen = rectcontext[-1];          // just assigning it an easier name to work with
         pen.beginPath();
         // this code may need cleanup
         // note that it draws the center lines twice due to the loop design
         // draw center lines
-        for (var k = 0; k <= vVal; k += pxPerM) {   // Y loop - horizontal lines spaced along Y axis
+        for (var k = 0; k <= vVal; k += CONFIG.DEFAULT.PX_PER_METER) {   // Y loop - horizontal lines spaced along Y axis
             pen.moveTo(-hVal, -k);  // left to right at distance j above & below center horizontal
             pen.lineTo(hVal, -k);
             pen.moveTo(-hVal, k);
             pen.lineTo(hVal, k);
         }
-        for (var k = 0; k <= hVal; k += pxPerM) {  // X loop - vertical lines spaced along X axis
+        for (var k = 0; k <= hVal; k += pxPerMeter) {  // X loop - vertical lines spaced along X axis
             pen.moveTo(-k, -vVal);  // top to bottom at distance j to left & right of center vertical
             pen.lineTo(-k, vVal);
             pen.moveTo(k, -vVal);
@@ -249,12 +270,12 @@ function drawGrid() {    // draw a grid to show scale
 // RECTANGLE functions
 function initRectangleArray() {
     var a,b,i;
-    rectangle = new Array(numRectangles);
-    for (i = 0; i < numRectangles; i++) {  
+    rectangle = new Array(CONFIG.NUM_RECTANGLES);
+    for (i = 0; i < CONFIG.NUM_RECTANGLES; i++) {  
         rectangle[i] = new Object();
         // write tables to screen
         document.write("<table id='recTable" + i + "' width=270 style='border:0px solid #000000'>");
-document.write("<tr style='line-height:140%'><td>FOV " + (1+i) + "</td><td><input type='button' id='getRectOn" + i + "' value='  ' onClick='setRectOn(" + i + ");' style='border-width:4px; outline:none; opacity:.8' ></td></tr>");
+        document.write("<tr style='line-height:140%'><td>FOV " + (1+i) + "</td><td><input type='button' id='getRectOn" + i + "' value='  ' onClick='setRectOn(" + i + ");' style='border-width:4px; outline:none; opacity:.8' ></td></tr>");
         document.write("<tr style='line-height:140%'><td>Aspect ratio W:H</td><td> <input type='text' id='getRatio" + i + "' size=12 style='font-size: small' onChange='setRatio(" + i + ",this.value)'></td></tr>");
         document.write("<tr style='line-height:140%'><td>Horiz:Vert FOV&deg</td><td><span id='getHVFOV" + i + "' size=12 style='font-size: small'>n/a</span></td></tr>");
         document.write("<tr style='line-height:140%'><td>Diagonal FOV&deg</td><td><input type='text' id='getFOV" + i + "' size=12 style='font-size: small' onChange='setFOV(" + i + ",this.value)'></td></tr>");
@@ -265,16 +286,16 @@ document.write("<tr style='line-height:140%'><td>FOV " + (1+i) + "</td><td><inpu
         document.write("</table>");
         document.write("<br/>");
         // set & display initial settings
-        rectangle[i].enabled = defaultButtonState;
-        rectangle[i].color = colorList[i];
-        a = rectangle[i].aspectWidth = defaultAspectWidth;
-        b = rectangle[i].aspectHeight = defaultAspectHeight;
+        rectangle[i].enabled = buttonState;
+        rectangle[i].color = CONFIG.COLORS[i];
+        a = rectangle[i].aspectWidth = CONFIG.DEFAULT.ASPECT_WIDTH;
+        b = rectangle[i].aspectHeight = CONFIG.DEFAULT.ASPECT_HEIGHT;
         rectangle[i].area = 0;
         document.getElementById("getRatio"+i).value = a.toString() + ":" + b.toString();
-        rectangle[i].FOV = defaultFOV;
-        document.getElementById("getFOV"+i).value = Math.round(rectangle[i].FOV * degsPerRadian); // JPF
-        a = rectangle[i].offsetX = defaultOffsetX;
-        b = rectangle[i].offsetY = defaultOffsetY;
+        rectangle[i].FOV = CONFIG.DEFAULT.FOV;
+        document.getElementById("getFOV"+i).value = Math.round(rectangle[i].FOV * CONFIG.DEGS_PER_RADIAN); // JPF
+        a = rectangle[i].offsetX = CONFIG.DEFAULT.OFFSET_X;
+        b = rectangle[i].offsetY = CONFIG.DEFAULT.OFFSET_Y;
         rectangle[i].hiX = rectangle[i].loX = rectangle[i].hiY = rectangle[i].loY = 0;
         document.getElementById("getOffset"+i).value = a.toString() + "," + b.toString(); 
         setRectOn(i);
@@ -286,7 +307,7 @@ function drawRectangle(i) {
     var a,d,h,w,x,y,aW,aH;
     clearCanvas(i);
     if (surface.showOverlap) {
-        clearCanvas(numRectangles);  // erase the overlap outline
+        clearCanvas(CONFIG.NUM_RECTANGLES);  // erase the overlap outline
     }
     if (rectangle[i].enabled) {
         // assign short names to variables for easier code
@@ -312,10 +333,10 @@ function drawRectangle(i) {
         surface.hiX[i] = x + w;
         surface.loY[i] = y;
         surface.hiY[i] = y + h;
-        w = w * pxPerM; h = h * pxPerM;    // scale everything up from meters to pixels
-        x = x * pxPerM; y = y * pxPerM;
-        context[i].fillStyle=rectangle[i].color;
-        context[i].fillRect(x,y,w,h);
+        w = w * pxPerMeter; h = h * pxPerMeter;    // scale everything up from meters to pixels
+        x = x * pxPerMeter; y = y * pxPerMeter;
+        rectcontext[i].fillStyle=rectangle[i].color;
+        rectcontext[i].fillRect(x,y,w,h);
         // write horizontal & vertical dimensions to rectangle table display (todo)
         rectangle[i].displayWidth = w;
         rectangle[i].displayHeight = h;
@@ -327,10 +348,10 @@ function drawRectangle(i) {
         // if circles enabled, draw circle
         if (surface.circlesOn) {
             var radius = Math.sqrt(w*w+h*h)/2;  // Pythagorean
-            context[i].beginPath();
-            //context[i].strokeStyle = rectangle[i].color;
-            context[i].arc(x+w/2,y+h/2,radius,0,2*Math.PI);
-            context[i].stroke();
+            rectcontext[i].beginPath();
+            //rectcontext[i].strokeStyle = rectangle[i].color;
+            rectcontext[i].arc(x+w/2,y+h/2,radius,0,2*Math.PI);
+            rectcontext[i].stroke();
         }
         
     }
@@ -342,7 +363,7 @@ function drawRectangle(i) {
 function drawOverlap() {
     // avoid writing overlap til all rectangles have been initialized at startup
     if (allInitialized) {  
-        var top = numRectangles;
+        var top = CONFIG.NUM_RECTANGLES;
         var j,k;
         clearCanvas(top);
         // loop through arrays finding highest lows and lowest highs
@@ -350,7 +371,7 @@ function drawOverlap() {
         // first, loop through the array to find the first enabled rectangle,
         // and use it for your starting values
         surface.rectangleCount = 0;  // use this counter to change display when 1 or 0 rectangles are enabled
-        for (var j = 0; j < numRectangles; j++) {
+        for (var j = 0; j < CONFIG.NUM_RECTANGLES; j++) {
             if (rectangle[j].enabled) {
                 surface.rectangleCount = surface.rectangleCount + 1;
                 break;
@@ -360,7 +381,7 @@ function drawOverlap() {
         surface.lowestHiX = surface.hiX[j];
         surface.highestLoY = surface.loY[j];
         surface.lowestHiY = surface.hiY[j];
-        for (var k = j+1; k < numRectangles; k++) {
+        for (var k = j+1; k < CONFIG.NUM_RECTANGLES; k++) {
             if (rectangle[k].enabled) {
                 surface.rectangleCount = surface.rectangleCount + 1;
                 if (surface.loX[k] > surface.highestLoX) {
@@ -377,16 +398,16 @@ function drawOverlap() {
                 }
             }
         }
-        var hLX = surface.highestLoX * pxPerM;
-        var hLY = surface.highestLoY * pxPerM;
-        var lHX = surface.lowestHiX * pxPerM;
-        var lHY = surface.lowestHiY * pxPerM;
+        var hLX = surface.highestLoX * pxPerMeter;
+        var hLY = surface.highestLoY * pxPerMeter;
+        var lHX = surface.lowestHiX * pxPerMeter;
+        var lHY = surface.lowestHiY * pxPerMeter;
         var ovW = lHX - hLX;
         var ovH = lHY - hLY;
-        surface.overlapWidth = ovW/pxPerM;
-        surface.overlapHeight = ovH/pxPerM;
+        surface.overlapWidth = ovW/pxPerMeter;
+        surface.overlapHeight = ovH/pxPerMeter;
         surface.overlapArea = surface.overlapWidth * surface.overlapHeight;  // overlap area
-        for (var j = 0; j < numRectangles; j++) {
+        for (var j = 0; j < CONFIG.NUM_RECTANGLES; j++) {
             if (rectangle[j].enabled) {
                 rectangle[j].overlap = surface.overlapArea / rectangle[j].area;
                 if (rectangle[j].overlap < 0) { rectangle[j].overlap = 0; }
@@ -397,11 +418,11 @@ function drawOverlap() {
         }
         document.getElementById("overlapArea").innerHTML = "";  // clear area before writing or in case not writing
         if (surface.showOverlap && (surface.rectangleCount > 1) && (surface.overlapArea > 0)) {
-            context[top].globalAlpha=1;
-            context[top].strokeStyle="000000";
-            context[top].beginPath();
-            context[top].rect(hLX,hLY,ovW,ovH);
-            context[top].stroke();
+            rectcontext[top].globalAlpha=1;
+            rectcontext[top].strokeStyle="000000";
+            rectcontext[top].beginPath();
+            rectcontext[top].rect(hLX,hLY,ovW,ovH);
+            rectcontext[top].stroke();
             // display overlap dimensions, area, and optionally the simplified aspect ratio
             var ovlpARW = surface.overlapWidth.toFixed(2);
             var ovlpARH = surface.overlapHeight.toFixed(2);
@@ -422,7 +443,7 @@ function drawOverlap() {
 }
 
 function drawAllRectangles() {
-  for (i = 0; i < numRectangles; i++) {
+  for (i = 0; i < CONFIG.NUM_RECTANGLES; i++) {
     drawRectangle(i);
   }
 }
@@ -435,31 +456,31 @@ function drawTriangle(i) {
     // Might someday add a "flip" button that does this, at either the rectangle or global level.
     // So... the logic here is to use the X values from the rectangle, ignore the Y values, and use depth as is.
     // There is never any vertical offset, just horizontal offset.
-    tContext[i].setTransform(1, 0, 0, 1, 0, 0);  // basically reset the canvas; could also have saved the original canvas & restored it
+    triangleContext[i].setTransform(1, 0, 0, 1, 0, 0);  // basically reset the canvas; could also have saved the original canvas & restored it
     clearTCanvas(i);
-    var d = surface.depth * pxPerM + 50;  // used in the loop below, maximum needed depth, plus a little extra space so people can scroll past the bottom to view it
+    var d = surface.depth * pxPerMeter + 50;  // used in the loop below, maximum needed depth, plus a little extra space so people can scroll past the bottom to view it
     if (surface.trianglesOn) {
         if (rectangle[i].enabled) {
-            if (!(tCanvas[i].height == d)) {tCanvas[i].height=d;}  // make sure canvas is tall enough, but also shrink it to conserve memory
-            tContext[i].translate(surface.centerX,0); // center the canvas origin and place at bottom of rectangle canvas
-            tContext[i].globalAlpha=defaultOpacity;  // set opacity, which tends to get reset to 1
-            tContext[i].fillStyle = rectangle[i].color;
-//            tContext[i].strokeStyle = rectangle[i].color;
-            tContext[i].beginPath();
+            if (!(triangleCanvas[i].height == d)) {triangleCanvas[i].height=d;}  // make sure canvas is tall enough, but also shrink it to conserve memory
+            triangleContext[i].translate(surface.centerX,0); // center the canvas origin and place at bottom of rectangle canvas
+            triangleContext[i].globalAlpha=opacity;  // set opacity, which tends to get reset to 1
+            triangleContext[i].fillStyle = rectangle[i].color;
+//            triangleContext[i].strokeStyle = rectangle[i].color;
+            triangleContext[i].beginPath();
             // apex at bottom of inverted triangle; note offsets are stored in meters, so don't multiply by 100 
-            tContext[i].moveTo((rectangle[i].offsetX*pxPerM),surface.depth*pxPerM);  
-            tContext[i].lineTo(rectangle[i].displayXMin,0);          // base of inverted triangle at top of canvas
-            tContext[i].lineTo(rectangle[i].displayXMax,0);
-            tContext[i].closePath();
-            tContext[i].fill();
-            tContext[i].closePath();
-//            tContext[i].stroke();
+            triangleContext[i].moveTo((rectangle[i].offsetX*pxPerMeter),surface.depth*pxPerMeter);  
+            triangleContext[i].lineTo(rectangle[i].displayXMin,0);          // base of inverted triangle at top of canvas
+            triangleContext[i].lineTo(rectangle[i].displayXMax,0);
+            triangleContext[i].closePath();
+            triangleContext[i].fill();
+            triangleContext[i].closePath();
+//            triangleContext[i].stroke();
         }
     }
 }
 
 function drawAllTriangles() {
-    for (i = 0; i < numRectangles; i++) {
+    for (i = 0; i < CONFIG.NUM_RECTANGLES; i++) {
         drawTriangle(i);
     }
 }
@@ -474,17 +495,17 @@ function setCvSize(s) {
     surface.centerX = surface.width/2;
     surface.centerY = surface.height/2;
     surface.tCanvasTop = surface.canvasTop + surface.height;  // triangle canvas, just below rectangle canvas
-    for (i=-1; i < numRectangles; i++) {
+    for (i=-1; i < CONFIG.NUM_RECTANGLES; i++) {
         // rectangle canvas
         canvas[i].setAttribute('width',surface.width);
         canvas[i].setAttribute('height',surface.height);
-        context[i].translate(surface.centerX,surface.centerY); // center the canvas origin
-        context[i].globalAlpha=defaultOpacity;  // this seems to be necessary; it seems to be getting reset in this function
+        rectcontext[i].translate(surface.centerX,surface.centerY); // center the canvas origin
+        rectcontext[i].globalAlpha=opacity;  // this seems to be necessary; it seems to be getting reset in this function
         // triangle canvas
-        tCanvas[i].setAttribute('width',surface.width);
-        tCanvas[i].setAttribute('height',surface.height);
-        // tContext[i].translate(surface.centerX,surface.centerY); // center the canvas origin
-        tContext[i].globalAlpha=defaultOpacity;  // this seems to be necessary; it seems to be getting reset in this function
+        triangleCanvas[i].setAttribute('width',surface.width);
+        triangleCanvas[i].setAttribute('height',surface.height);
+        // triangleContext[i].translate(surface.centerX,surface.centerY); // center the canvas origin
+        triangleContext[i].globalAlpha=opacity;  // this seems to be necessary; it seems to be getting reset in this function
     }
     drawGrid();
     drawAllRectangles();  // this includes drawAllTriangles(), which also clears the triangle canvases; the rectangle will eventually just be a frustum object
@@ -535,7 +556,7 @@ function setShowOverlap() {
 }
     
 function setScale(n) {
-    pxPerM = parseFloat(n);
+    pxPerMeter = parseFloat(n);
     drawAllRectangles();
     drawGrid();
 }
@@ -596,7 +617,7 @@ function setSimplifyRatio() {
         simplifyRatio = true;
         document.getElementById("getSimplifyRatio").value="ON";
         //setRatio(document.getElementById(getSimplifyRatio).value);
-        for (var k = 0; k < numRectangles; k++) {
+        for (var k = 0; k < CONFIG.NUM_RECTANGLES; k++) {
             if (rectangle[k].enabled) {
                 setRatio(k,document.getElementById("getRatio"+k).value);
             }
@@ -629,7 +650,7 @@ function gcd(a,b) {  // Euclid's algorithm to find greatest common denominator o
 function setFOV(i,n) {
     // diagonal FOV; display as degrees but work in radians
     document.getElementById("getFOV"+i).value=(Math.round(100*n)/100);
-    rectangle[i].FOV = n / degsPerRadian;
+    rectangle[i].FOV = n / CONFIG.DEGS_PER_RADIAN;
     drawRectangle(i);
 }
 
@@ -637,10 +658,10 @@ function setFOV(i,n) {
     // horizontal & vertical; not wired up yet, needs to update diagonal FOV, dimensions, and aspect ratio
     // display as degrees but work in radians
     var a=s.split(":");
-    rectangle[i].horizFOV = a[0] / degsPerRadian;
-    rectangle[i].vertFOV = a[1] / degsPerRadian;
+    rectangle[i].horizFOV = a[0] / CONFIG.DEGS_PER_RADIAN;
+    rectangle[i].vertFOV = a[1] / CONFIG.DEGS_PER_RADIAN;
     rectangle[i].FOV = Math.sqrt(Math.pow(rectangle[i].horizFOV,2) + Math.pow(rectangle[i].vertFOV,2));
-    document.getElementById("getFOV"+i).value = Math.round(rectangle[i].FOV * degsPerRadian);
+    document.getElementById("getFOV"+i).value = Math.round(rectangle[i].FOV * CONFIG.DEGS_PER_RADIAN);
     drawRectangle(i);
 } */
 
